@@ -2,30 +2,11 @@
 
 ## configuration variables:
 VLAN=5
-IPV4_IP="10.0.5.3"
-IPV4_GW="10.0.5.1/24"
+declare -a IPV4_IP_ARRAY=("10.10.5.3" "10.10.5.4")
+IPV4_GW="10.10.5.1/24"
 
-# if you want IPv6 support, generate a ULA, select an IP for the dns server
-# and an appropriate gateway address on the same /64 network. Make sure that
-# the 20-dns.conflist is updated appropriately. It will need the IP and GW
-# added along with a ::/0 route. Also make sure that additional --dns options
-# are passed to podman with your IPv6 DNS IPs when deploying the container for
-# the first time. You will also need to configure your VLAN to have a static
-# IPv6 block.
-
-# IPv6 Also works with Prefix Delegation from your provider. The gateway is the
-# IP of br(VLAN) and you can pick any ip address within that subnet that dhcpv6
-# isn't serving
-IPV6_IP=""
-IPV6_GW=""
-
-# set this to the interface(s) on which you want DNS TCP/UDP port 53 traffic
-# re-routed through the DNS container. separate interfaces with spaces.
-# e.g. "br0" or "br0 br1" etc.
-FORCED_INTFC=""
-
-# container name; e.g. nextdns, pihole, adguardhome, etc.
-CONTAINER=nextdns
+# container names; e.g. nextdns, pihole, adguardhome, etc.
+declare -a CONTAINER_ARRAY=("pihole" "cloudflared")
 
 ## network configuration and startup:
 CNI_PATH=/mnt/data/podman/cni
@@ -52,47 +33,21 @@ ip link set br${VLAN} promisc on
 ip link add br${VLAN}.mac link br${VLAN} type macvlan mode bridge
 ip addr add ${IPV4_GW} dev br${VLAN}.mac noprefixroute
 
-# (optional) add IPv6 IP to VLAN bridge macvlan bridge
-if [ -n "${IPV6_GW}" ]; then
-  ip -6 addr add ${IPV6_GW} dev br${VLAN}.mac noprefixroute
-fi
-
 # set macvlan bridge promiscuous and bring it up
 ip link set br${VLAN}.mac promisc on
 ip link set br${VLAN}.mac up
 
 # add IPv4 route to DNS container
-ip route add ${IPV4_IP}/32 dev br${VLAN}.mac
+for ip in ${IPV4_IP_ARRAY[@]}; 
+do
+    ip route add ${ip}/32 dev br${VLAN}.mac
+done
 
-# (optional) add IPv6 route to DNS container
-if [ -n "${IPV6_IP}" ]; then
-  ip -6 route add ${IPV6_IP}/128 dev br${VLAN}.mac
-fi
-
-if podman container exists ${CONTAINER}; then
-  podman start ${CONTAINER}
-else
-  logger -s -t podman-dns -p ERROR Container $CONTAINER not found, make sure you set the proper name, if you have you can ignore this error
-fi
-
-# (optional) IPv4 force DNS (TCP/UDP 53) through DNS container
-for intfc in ${FORCED_INTFC}; do
-  if [ -d "/sys/class/net/${intfc}" ]; then
-    for proto in udp tcp; do
-      prerouting_rule="PREROUTING -i ${intfc} -p ${proto} ! -s ${IPV4_IP} ! -d ${IPV4_IP} --dport 53 -j DNAT --to ${IPV4_IP}"
-      iptables -t nat -C ${prerouting_rule} || iptables -t nat -A ${prerouting_rule}
-
-      postrouting_rule="POSTROUTING -o ${intfc} -d ${IPV4_IP} -p ${proto} --dport 53 -j MASQUERADE"
-      iptables -t nat -C ${postrouting_rule} || iptables -t nat -A ${postrouting_rule}
-
-      # (optional) IPv6 force DNS (TCP/UDP 53) through DNS container
-      if [ -n "${IPV6_IP}" ]; then
-        prerouting_rule="PREROUTING -i ${intfc} -p ${proto} ! -s ${IPV6_IP} ! -d ${IPV6_IP} --dport 53 -j DNAT --to ${IPV6_IP}"
-        ip6tables -t nat -C ${prerouting_rule} || ip6tables -t nat -A ${prerouting_rule}
-
-        postrouting_rule="POSTROUTING -o ${intfc} -d ${IPV6_IP} -p ${proto} --dport 53 -j MASQUERADE"
-        ip6tables -t nat -C ${postrouting_rule} || ip6tables -t nat -A ${postrouting_rule}
-      fi
-    done
-  fi
+for container in ${CONTAINER_ARRAY[@]}; 
+do
+    if podman container exists ${container}; then
+    podman start ${container}
+    else
+    logger -s -t podman-dns -p ERROR Container $container not found, make sure you set the proper name, if you have you can ignore this error
+    fi
 done
